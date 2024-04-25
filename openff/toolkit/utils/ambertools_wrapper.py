@@ -272,11 +272,68 @@ class AmberToolsToolkitWrapper(base_wrapper.ToolkitWrapper):
             for index, token in enumerate(text_charges):
                 charges[index] = float(token)
             # TODO: Ensure that the atoms in charged.mol2 are in the same order as in molecule.sdf
+
+            # Add the optimized conformer to the molecule
+            expected_elements = [atom.symbol for atom in molecule.atoms]
+            coords = self._get_coords_from_sqm_out(
+                f"{tmpdir}/sqm.out", validate_elements=expected_elements
+            )
+            molecule._add_conformer(coords * unit.angstrom)
+
         charges = Quantity(charges, unit.elementary_charge)
         molecule.partial_charges = charges
 
         if normalize_partial_charges:
             molecule._normalize_partial_charges()
+
+
+    def _get_coords_from_sqm_out(self, file_path, validate_elements=None):
+        """
+        Extract the optimized coordinates from an sqm.out file produced by sqm.
+
+        Parameters
+        ----------
+        file_path
+            The path to sqm.out
+        validate_elements
+            The element symbols expected in molecule index order. A ValueError will be raised
+            if the elements are not found in this order.
+
+        Returns
+        -------
+        coords
+            The optimized coordinates from the sqm.out file, as a numpy array of shape (n_atoms, 3)
+        """
+
+        data = open(file_path).read()
+
+        begin_sep = """Final Structure
+
+  QMMM: QM Region Cartesian Coordinates (*=link atom) 
+  QMMM: QM_NO.   MM_NO.  ATOM         X         Y         Z
+"""
+        end_sep = """\n\n           --------- Calculation Completed ----------"""
+
+        # Extract the chunk of text between begin_sep and end_sep, and split it by newline
+        coords_lines = data.split(begin_sep)[1].split(end_sep)[0].split("\n")
+        # Iterate over the lines and populate the numpy array to return
+        coords = np.zeros((len(coords_lines), 3))
+        for index, line in enumerate(coords_lines):
+            linesp = line.split()
+            atom_index = int(linesp[1])
+            atom_element = linesp[3]
+            coords[index, 0] = float(linesp[4])
+            coords[index, 1] = float(linesp[5])
+            coords[index, 2] = float(linesp[6])
+            # If validate_elements was provided, ensure that the ordering of element symbols is what we expected
+            if validate_elements is not None:
+                if (atom_element != validate_elements[atom_index - 1]):
+                    raise ValueError(
+                        f"Element or indexing in sqm output differ from expectation. "
+                        f"Expected {validate_elements[atom_index]} with index {atom_index}, "
+                        f"but SQM output has {atom_element} for the same atom."
+                    )
+        return coords
 
     def _modify_sqm_in_to_request_bond_orders(self, file_path):
         """
